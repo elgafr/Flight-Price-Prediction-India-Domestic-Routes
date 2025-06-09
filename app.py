@@ -132,6 +132,23 @@ else:
             rel='stylesheet',
             href='https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css'
         ),
+        # Add custom Toast component
+        html.Div(
+            id='toast',
+            className="fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 -translate-y-full",
+            style={"display": "none", "z-index": "9999"},
+            children=[
+                html.Div(id='toast-header', className="font-bold mb-2"),
+                html.Div(id='toast-content', className="text-sm")
+            ]
+        ),
+        # Add interval for auto-hiding toast
+        dcc.Interval(
+            id='toast-interval',
+            interval=2000,  # 2 seconds
+            n_intervals=0,
+            disabled=True
+        ),
         html.H1("Flight Price (₹) Prediction – India Domestic Routes", className="text-4xl font-extrabold text-center text-blue-700 mb-8"),
         html.Div([
             # Model dropdown
@@ -153,7 +170,8 @@ else:
                     multiple=False,
                     className="mt-1 block w-full"
                 ),
-                html.Div(id='upload-error', className="text-red-600 mt-2")
+                html.Div(id='upload-error', className="text-red-600 mt-2"),
+                html.Div(id='csv-preview', className="mt-4")
             ], className="mb-4"),
             # Existing input fields (unchanged)
             html.Div([
@@ -284,16 +302,22 @@ else:
         flights = airline_flight_map.get(airline, [])
         return [{'label': flight, 'value': flight} for flight in flights]
 
-    # Callback to handle predictions and history (updated to include CSV upload)
+    # Callback to handle predictions and history
     @app.callback(
         [Output('prediction-output', 'children'),
          Output('prediction-history', 'data'),
          Output('history-table', 'children'),
          Output('last-click-timestamp', 'data'),
-         Output('upload-error', 'children')],
+         Output('upload-error', 'children'),
+         Output('toast', 'style'),
+         Output('toast', 'className'),
+         Output('toast-header', 'children'),
+         Output('toast-content', 'children'),
+         Output('toast-interval', 'disabled')],
         [Input('predict-button', 'n_clicks'),
          Input('clear-history-button', 'n_clicks'),
-         Input('upload-data', 'contents')],
+         Input('upload-data', 'contents'),
+         Input('toast-interval', 'n_intervals')],
         [State('model-dropdown', 'value'),
          State('airline-dropdown', 'value'),
          State('flight-dropdown', 'value'),
@@ -309,32 +333,39 @@ else:
          State('last-click-timestamp', 'data'),
          State('upload-data', 'filename')]
     )
-    def predict_price_and_update_history(n_clicks_predict, n_clicks_clear, upload_contents, selected_model, airline, flight, source_city, 
-                                        departure_time, stops, arrival_time, destination_city, class_, duration, days_left, history, last_click, filename):
+    def handle_predictions_and_history(n_clicks_predict, n_clicks_clear, upload_contents, n_intervals,
+                                     selected_model, airline, flight, source_city, departure_time, stops, 
+                                     arrival_time, destination_city, class_, duration, days_left, history, 
+                                     last_click, filename):
         ctx = dash.callback_context
         if not ctx.triggered:
-            return [""], history, generate_history_table(history), None, ""
+            return [""], history, generate_history_table(history), None, "", {"display": "none"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 -translate-y-full", "", "", True
 
         triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+        # Handle toast auto-hide
+        if triggered_id == 'toast-interval':
+            return dash.no_update, dash.no_update, dash.no_update, dash.no_update, dash.no_update, {"display": "none"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 -translate-y-full", "", "", True
+
         current_time = datetime.now().timestamp()
 
         # Debounce: Prevent rapid clicks
         if last_click is not None and (current_time - last_click) < 1:
-            return [""], history, generate_history_table(history), last_click, ""
+            return [""], history, generate_history_table(history), last_click, "", {"display": "none"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 -translate-y-full", "", "", True
 
         # Handle clear history
         if triggered_id == 'clear-history-button' and n_clicks_clear > 0:
-            return [""], [], [], current_time, ""
+            return [""], [], [], current_time, "", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-green-100 border-l-4 border-green-500 text-green-700", "Success", "History has been cleared", False
 
         # Handle CSV upload
         if triggered_id == 'upload-data' and upload_contents is not None:
             df = parse_csv(upload_contents, filename)
             if df is None:
-                return [""], history, generate_history_table(history), current_time, "Error: Please upload a valid CSV file."
+                return [""], history, generate_history_table(history), current_time, "Error: Please upload a valid CSV file.", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-red-100 border-l-4 border-red-500 text-red-700", "Error", "Please upload a valid CSV file", False
             
             is_valid, error_msg = validate_csv_data(df)
             if not is_valid:
-                return [""], history, generate_history_table(history), current_time, f"Error: {error_msg}"
+                return [""], history, generate_history_table(history), current_time, f"Error: {error_msg}", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-red-100 border-l-4 border-red-500 text-red-700", "Error", error_msg, False
             
             try:
                 model = joblib.load(f'models/{selected_model}.joblib')
@@ -367,15 +398,15 @@ else:
                         new_entries.append(new_entry)
                 
                 history.extend(new_entries)
-                return [html.Div(f"Processed {len(new_entries)} predictions from CSV.", className="text-green-600")], history, generate_history_table(history), current_time, ""
+                return [html.Div(f"Processed {len(new_entries)} predictions from CSV.", className="text-green-600")], history, generate_history_table(history), current_time, "", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-green-100 border-l-4 border-green-500 text-green-700", "Success", f"Successfully processed {len(new_entries)} predictions from CSV", False
             except Exception as e:
-                return [""], history, generate_history_table(history), current_time, f"Error in prediction: {str(e)}"
+                return [""], history, generate_history_table(history), current_time, f"Error in prediction: {str(e)}", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-red-100 border-l-4 border-red-500 text-red-700", "Error", f"Error in prediction: {str(e)}", False
 
-        # Handle single prediction (original functionality)
+        # Handle single prediction
         if triggered_id == 'predict-button' and n_clicks_predict > 0:
             if None in [airline, flight, source_city, departure_time, stops, 
                         arrival_time, destination_city, class_, duration, days_left]:
-                return [html.Div("Error: All fields must be filled.", className="text-red-600")], history, generate_history_table(history), current_time, ""
+                return [html.Div("Error: All fields must be filled.", className="text-red-600")], history, generate_history_table(history), current_time, "", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-red-100 border-l-4 border-red-500 text-red-700", "Error", "All fields must be filled", False
             
             try:
                 model = joblib.load(f'models/{selected_model}.joblib')
@@ -416,24 +447,26 @@ else:
                 }
                 
                 if history and history[-1] == new_entry:
-                    return [html.Div("This prediction is already in history.", className="text-blue-600")], history, generate_history_table(history), current_time, ""
+                    return [html.Div("This prediction is already in history.", className="text-blue-600")], history, generate_history_table(history), current_time, "", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-blue-100 border-l-4 border-blue-500 text-blue-700", "Info", "This prediction is already in history", False
                 
                 history.append(new_entry)
                 prediction_output = html.Div([
                     html.H3(f"Predicted Price: ₹{prediction:,.2f}", className="text-2xl font-semibold"),
-                    html.P(f"Confidence Score: {conf_score:.2f}", className="text-green-600")
+                    html.P(f"Confidence Score: {conf_score:.2f}", className="font-semibold text-green-600"),
+                    html.P(f"Uncertainty Score: {1 - conf_score:.2f}", className="font-semibold text-red-600")
                 ])
-                return prediction_output, history, generate_history_table(history), current_time, ""
+                return prediction_output, history, generate_history_table(history), current_time, "", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-green-100 border-l-4 border-green-500 text-green-700", "Success", f"Successfully predicted price: ₹{prediction:,.2f}", False
             except Exception as e:
-                return [html.Div(f"Error in prediction: {str(e)}", className="text-red-600")], history, generate_history_table(history), current_time, ""
+                return [html.Div(f"Error in prediction: {str(e)}", className="text-red-600")], history, generate_history_table(history), current_time, "", {"display": "block"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 bg-red-100 border-l-4 border-red-500 text-red-700", "Error", f"Error in prediction: {str(e)}", False
         
-        return [""], history, generate_history_table(history), current_time, ""
+        return [""], history, generate_history_table(history), current_time, "", {"display": "none"}, "fixed top-4 right-4 w-80 p-4 rounded-lg shadow-lg transform transition-transform duration-300 -translate-y-full", "", "", True
 
     # Function to generate history table
     def generate_history_table(history):
         if not history:
             return html.P("No prediction history yet.", className="italic")
         
+        # Define columns without row_number in mapping
         column_mapping = {
             'Timestamp': 'timestamp',
             'Model': 'model',
@@ -448,25 +481,70 @@ else:
             'Duration': 'duration',
             'Days Left': 'days_left',
             'Prediction': 'prediction',
-            'Confidence': 'confidence'
+            'Confidence': 'confidence',
+            'Uncertainty': 'uncertainty'
         }
         
         return html.Table([
             html.Thead(
                 html.Tr([
-                    html.Th(col, className="px-4 py-2 border bg-blue-100 text-left text-sm font-medium text-blue-700")
+                    html.Th('No.', className="px-4 py-2 border bg-blue-100 text-left text-sm font-medium text-blue-700")
+                ] + [
+                    html.Th(col, 
+                           className=f"px-4 py-2 border bg-blue-100 text-left text-sm font-medium {'text-green-600' if col == 'Confidence' else 'text-red-600' if col == 'Uncertainty' else 'text-blue-700'}")
                     for col in column_mapping.keys()
                 ])
             ),
             html.Tbody([
                 html.Tr([
-                    html.Td(f"{entry.get(column_mapping[col], ''):.2f}" if col in ['Duration', 'Prediction', 'Confidence'] else entry.get(column_mapping[col], ''),
-                            className="px-4 py-2 border text-sm")
+                    html.Td(str(i + 1), className="px-4 py-2 border text-sm font-medium text-blue-700")
+                ] + [
+                    html.Td(
+                        f"{1 - entry.get('confidence', 0):.2f}" if col == 'Uncertainty'
+                        else f"{entry.get(column_mapping[col], ''):.2f}" if col in ['Duration', 'Prediction', 'Confidence']
+                        else entry.get(column_mapping[col], ''),
+                        className="px-4 py-2 border text-sm"
+                    )
                     for col in column_mapping.keys()
                 ])
-                for entry in history
+                for i, entry in enumerate(history)
             ])
         ], className="min-w-full divide-y divide-blue-200 mb-30")
+
+    # Callback to handle CSV preview
+    @app.callback(
+        Output('csv-preview', 'children'),
+        Input('upload-data', 'contents'),
+        State('upload-data', 'filename')
+    )
+    def update_csv_preview(contents, filename):
+        if contents is None:
+            return None
+        
+        df = parse_csv(contents, filename)
+        if df is None:
+            return None
+        
+        return html.Div([
+            html.H4("CSV Preview", className="text-lg font-semibold mb-2"),
+            html.Div([
+                html.Table([
+                    html.Thead(
+                        html.Tr([
+                            html.Th(col, className="px-4 py-2 border bg-blue-100 text-left text-sm font-medium text-blue-700")
+                            for col in df.columns
+                        ])
+                    ),
+                    html.Tbody([
+                        html.Tr([
+                            html.Td(df.iloc[i][col], className="px-4 py-2 border text-sm")
+                            for col in df.columns
+                        ])
+                        for i in range(min(5, len(df)))
+                    ])
+                ], className="min-w-full divide-y divide-blue-200")
+            ], className="overflow-x-auto")
+        ])
 
     # Callback for metrics chart
     @app.callback(
