@@ -22,7 +22,8 @@ Thumbs.db
 
 # Ignore model artifacts
 *.pkl
-*.joblib
 
+models/RandomForest_MI.joblib
+models/RandomForest_None.joblib
 # Ignore test file in root
 /tes.py
